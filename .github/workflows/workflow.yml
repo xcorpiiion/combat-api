@@ -50,7 +50,7 @@ jobs:
         with:
           args: --image,jetbrains/qodana-jvm:latest
         env:
-          QODANA_TOKEN: ${{ secrets.QODANA_TOKEN_140741660 }}
+          QODANA_TOKEN: ${{ secrets.QODANA_TOKEN_1922378273 }}
 
       # ── Etapa 3: Status ───────────────────────────────────────────────────
       - name: Status do Build
