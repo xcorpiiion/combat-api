@@ -1,0 +1,58 @@
+name: CI - combat-api
+
+on:
+  push:
+    branches: [ "master", "dev" ]
+  pull_request:
+    branches: [ "master" ]
+
+jobs:
+  pipeline-qualidade:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+      packages: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      # ── Etapa 1: Build e testes ───────────────────────────────────────────
+      - name: Build and Test
+        env:
+          GITHUB_ACTOR: ${{ secrets.ACTOR }}
+          GITHUB_PACKAGES_TOKEN: ${{ secrets.PACKAGES_TOKEN }}
+        run: |
+          echo "::group::Compilando e rodando testes"
+          mvn clean verify \
+            --settings .github/workflows/settings.xml \
+            -Dspring.datasource.url=jdbc:h2:mem:testdb \
+            -Dspring.datasource.driver-class-name=org.h2.Driver \
+            -Dspring.jpa.database-platform=org.hibernate.dialect.H2Dialect \
+            -Dapp.auth.token-secret=chave-de-ci-com-pelo-menos-64-caracteres-para-passar-na-validacao \
+            -Deureka.client.enabled=false \
+            -Dspring.cloud.config.enabled=false
+          echo "::notice::Build e testes finalizados!"
+          echo "::endgroup::"
+
+      # ── Etapa 2: Análise de qualidade ─────────────────────────────────────
+      - name: Qodana Scan
+        uses: JetBrains/qodana-action@v2025.3
+        with:
+          args: --image,jetbrains/qodana-jvm:latest
+        env:
+          QODANA_TOKEN: ${{ secrets.QODANA_TOKEN_140741660 }}
+
+      # ── Etapa 3: Status ───────────────────────────────────────────────────
+      - name: Status do Build
+        if: success()
+        run: echo "::notice::game-api aprovada e pronta!"

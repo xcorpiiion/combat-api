@@ -1,3 +1,53 @@
+server:
+  port: ${PORT:8096}
+
 spring:
   application:
     name: combat-api
+
+  config:
+    import:
+      - optional:configserver:${CONFIG_SERVER_URL:http://localhost:8888}
+
+  data:
+    mongodb:
+      host: ${MONGO_HOST:localhost}
+      port: ${MONGO_PORT:27017}
+      database: combat_db
+      username: ${MONGO_ROOT_USER:admin}
+      password: ${MONGO_ROOT_PASS}
+      authentication-database: admin
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_URL:http://localhost:8761/eureka/}
+  instance:
+    prefer-ip-address: true
+    hostname: ${EUREKA_INSTANCE_HOSTNAME:localhost}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+  tracing:
+    sampling:
+      probability: 1.0
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_URL:http://localhost:9411/api/v2/spans}
+
+app:
+  auth:
+    token-secret: ${JWT_TOKEN_SECRET}
+    token-expiration-msec: 900000
+    refresh-token-expiration-msec: 604800000
+
+logging:
+  level:
+    root: INFO
+    br.com.study.combatapi: DEBUG
