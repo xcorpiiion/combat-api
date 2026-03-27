@@ -5,15 +5,9 @@ import br.com.study.combatapi.model.enums.ResultadoBatalhaType;
 
 public class BatalhaResponse {
 
-    /**
-     * Retornado ao iniciar a batalha.
-     * O front usa isso pra montar a tela de combate.
-     */
     public record Inicio(
             String batalhaId,
             String sessaoId,
-
-            // Inimigo
             String nomeInimigo,
             String descricaoInimigo,
             CategoriaInimigoType categoriaInimigo,
@@ -21,59 +15,48 @@ public class BatalhaResponse {
             int ataqueInimigo,
             int defesaInimigo,
             long recompensaAlmas,
-
-            // Estado inicial do personagem
             int hpPersonagem,
             int mpPersonagem,
             int turnoAtual
     ) {
     }
 
-    /**
-     * Retornado após cada turno executado.
-     * Contém a narração do GM + estado atualizado da batalha.
-     */
     public record Turno(
-            // Resultado do turno
             int danoCausado,
             int danoRecebido,
             boolean critico,
 
-            // Estado atualizado
+            /**
+             * Descrição da memória queimada no crítico.
+             * Enviada pra narrative-api narrar o que foi perdido.
+             * Null se não houve crítico ou sem memórias disponíveis.
+             */
+            String memoriaQueimada,
+
             int hpPersonagemAtual,
             int mpPersonagemAtual,
             int hpInimigoAtual,
             int turnoAtual,
-
-            // Fim de batalha
             ResultadoBatalhaType resultado,
             boolean batalhaEncerrada,
 
-            // Preenchido só em derrota
+            // Derrota normal
             Long soulDropId,
             String localizacaoSoulDrop,
 
-            // Preenchido só em vitória
-            Long almasGanhas
+            // Vitória
+            Long bitsConscienciaGanhos
     ) {
     }
 
-    /**
-     * Estado completo da batalha — usado pra reconectar
-     * caso o jogador feche e reabra o app durante uma batalha.
-     */
     public record Estado(
             String batalhaId,
             int turnoAtual,
             ResultadoBatalhaType resultado,
-
-            // Personagem
             int hpPersonagemAtual,
             int hpPersonagemMaximo,
             int mpPersonagemAtual,
             int mpPersonagemMaximo,
-
-            // Inimigo
             String nomeInimigo,
             CategoriaInimigoType categoriaInimigo,
             int hpInimigoAtual,

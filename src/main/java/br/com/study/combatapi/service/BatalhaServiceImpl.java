@@ -26,15 +26,19 @@ public class BatalhaServiceImpl implements BatalhaService {
     private final GameApiFeign gameApiFeign;
 
     // ─────────────────────────────────────────────
-    // Iniciar batalha
+    // Iniciar
     // ─────────────────────────────────────────────
 
     @Override
     public BatalhaResponse.Inicio iniciar(BatalhaRequest.IniciarBatalha request, Long usuarioId) {
         if (repositorio.existsByPersonagem_PersonagemIdAndResultado(
                 request.personagemId(), ResultadoBatalhaType.EM_ANDAMENTO)) {
+            throw new DataIntegrityException("Personagem já está em batalha.");
+        }
+
+        if (request.hollow()) {
             throw new DataIntegrityException(
-                    "Personagem já está em batalha. Termine o combate atual antes de iniciar outro."
+                    "Personagem é um Hollow Digital. Sua mente pertence ao sistema."
             );
         }
 
@@ -45,12 +49,10 @@ public class BatalhaServiceImpl implements BatalhaService {
         batalha.setInimigo(montarInimigo(request));
 
         repositorio.save(batalha);
-        log.info("Batalha iniciada: {} vs {} (id: {})",
-                request.nomePersonagem(), request.nomeInimigo(), batalha.getId());
+        log.info("Batalha iniciada: {} vs {}", request.nomePersonagem(), request.nomeInimigo());
 
         return new BatalhaResponse.Inicio(
-                batalha.getId(),
-                batalha.getSessaoId(),
+                batalha.getId(), batalha.getSessaoId(),
                 batalha.getInimigo().getNome(),
                 batalha.getInimigo().getDescricao(),
                 batalha.getInimigo().getCategoria(),
@@ -76,7 +78,6 @@ public class BatalhaServiceImpl implements BatalhaService {
             throw new DataIntegrityException("Esta batalha já foi encerrada.");
         }
 
-        // USAR_ITEM descarta o combo — inimigo age sem oposição
         if (request.combo().contains(AcaoTurnoType.USAR_ITEM)) {
             return executarTurnoItem(batalha, request.itemId());
         }
@@ -84,32 +85,29 @@ public class BatalhaServiceImpl implements BatalhaService {
         validarCombo(batalha.getPersonagem(), request.combo());
 
         // ── Fase do jogador ──────────────────────
-        int danoCausado = executarCombo(batalha, request.combo());
-        batalha.getInimigo().receberDano(danoCausado);
+        ResultadoCombo resultado = executarCombo(batalha, request.combo());
+        batalha.getInimigo().receberDano(resultado.danoTotal());
 
-        // ── Verifica vitória ─────────────────────
+        // ── Vitória ──────────────────────────────
         if (batalha.getInimigo().estaMorto()) {
-            return encerrarComVitoria(batalha, danoCausado);
+            return encerrarComVitoria(batalha, resultado);
         }
 
         // ── Fase do inimigo ──────────────────────
         int danoRecebido = calcularDanoInimigo(batalha);
         batalha.getPersonagem().receberDano(danoRecebido);
 
-        // ── Verifica derrota ─────────────────────
+        // ── Derrota ──────────────────────────────
         if (batalha.getPersonagem().estaMorto()) {
-            return encerrarComDerrota(batalha, danoCausado, danoRecebido);
+            return encerrarComDerrota(batalha, resultado.danoTotal(), danoRecebido);
         }
 
-        // ── Avança o turno ───────────────────────
         batalha.avancarTurno();
         repositorio.save(batalha);
 
-        log.info("Turno {} concluído — dano causado: {}, dano recebido: {}",
-                batalha.getTurnoAtual(), danoCausado, danoRecebido);
-
         return new BatalhaResponse.Turno(
-                danoCausado, danoRecebido, false,
+                resultado.danoTotal(), danoRecebido, resultado.critico(),
+                resultado.memoriaQueimada(),
                 batalha.getPersonagem().getHpAtual(),
                 batalha.getPersonagem().getMpAtual(),
                 batalha.getInimigo().getHpAtual(),
@@ -121,55 +119,86 @@ public class BatalhaServiceImpl implements BatalhaService {
 
     @Override
     public BatalhaResponse.Estado buscarEstado(String batalhaId, Long usuarioId) {
-        Batalha batalha = buscarBatalhaAtiva(batalhaId, usuarioId);
-        return toEstado(batalha);
+        return toEstado(buscarBatalhaAtiva(batalhaId, usuarioId));
     }
 
     // ─────────────────────────────────────────────
     // Execução do combo
     // ─────────────────────────────────────────────
 
-    private int executarCombo(Batalha batalha, List<AcaoTurnoType> combo) {
+    private ResultadoCombo executarCombo(Batalha batalha, List<AcaoTurnoType> combo) {
         EstadoPersonagemCombate p = batalha.getPersonagem();
         Inimigo inimigo = batalha.getInimigo();
         int danoTotal = 0;
+        boolean critico = false;
+        String memoriaQueimada = null;
 
         for (AcaoTurnoType acao : combo) {
             switch (acao) {
-                case ATACAR -> danoTotal += calcularDanoAtaque(p, inimigo, 1.0);
-                case ATAQUE_FORTE -> danoTotal += calcularDanoAtaque(p, inimigo, 1.8);
+                case ATACAR -> {
+                    var r = calcularDanoAtaque(p, inimigo, 1.0);
+                    danoTotal += r.dano();
+                    if (r.critico() && memoriaQueimada == null) {
+                        critico = true;
+                        memoriaQueimada = queimarMemoriaDoPersonagem(p);
+                    }
+                }
+                case ATAQUE_FORTE -> {
+                    var r = calcularDanoAtaque(p, inimigo, 1.8);
+                    danoTotal += r.dano();
+                    if (r.critico() && memoriaQueimada == null) {
+                        critico = true;
+                        memoriaQueimada = queimarMemoriaDoPersonagem(p);
+                    }
+                }
                 case ESQUIVAR -> p.setEsquivaAtiva(true);
                 case DEFENDER -> p.setDefesaAtiva(true);
                 case ESPECIAL -> {
-                    danoTotal += calcularEspecial(p, inimigo);
+                    danoTotal += (int) (p.getAtaque() * 2.0);
                     p.gastarMp(3);
                 }
-                default -> { /* USAR_ITEM já tratado antes */ }
+                default -> {
+                }
             }
         }
-        return danoTotal;
+
+        return new ResultadoCombo(danoTotal, critico, memoriaQueimada);
     }
 
-    private int calcularDanoAtaque(EstadoPersonagemCombate p, Inimigo inimigo, double multiplicador) {
-        int danoBase = (int) (p.getAtaque() * multiplicador);
+    /**
+     * Tenta queimar uma memória via Feign na game-api.
+     * Se não houver memórias disponíveis, o crítico ocorre sem custo narrativo.
+     */
+    private String queimarMemoriaDoPersonagem(EstadoPersonagemCombate p) {
+        if (!p.isTemMemoriasDisponiveis()) return null;
+        try {
+            var response = gameApiFeign.queimarMemoria(p.getPersonagemId()).getBody();
+            if (response == null) return null;
+            // Atualiza flag local
+            p.setTemMemoriasDisponiveis(false);
+            return response.descricao();
+        } catch (Exception e) {
+            log.warn("Não foi possível queimar memória — crítico sem custo narrativo");
+            return null;
+        }
+    }
+
+    private AtaqueDano calcularDanoAtaque(EstadoPersonagemCombate p, Inimigo inimigo, double mult) {
+        int danoBase = (int) (p.getAtaque() * mult);
         int danoReduzido = Math.max(1, danoBase - inimigo.getDefesa());
-        boolean critico = Math.random() < (p.getSorte() / 100.0);
-        return critico ? danoReduzido * 2 : danoReduzido + variacao(danoReduzido);
+        boolean critico = p.isTemMemoriasDisponiveis()
+                && Math.random() < (p.getSorte() / 100.0);
+        int dano = critico ? danoReduzido * 2 : danoReduzido + variacao(danoReduzido);
+        return new AtaqueDano(dano, critico);
     }
 
-    private int calcularEspecial(EstadoPersonagemCombate p, Inimigo inimigo) {
-        // Especial ignora DEF do inimigo — dano mágico puro
-        int danoBase = (int) (p.getAtaque() * 2.0);
-        return danoBase + variacao(danoBase);
-    }
-
-    private int calcularDanoInimigo(Batalha batalha) {
-        int base = batalha.getInimigo().getAtaque();
+    private int calcularDanoInimigo(Batalha b) {
+        int base = b.getInimigo().getAtaque();
         return base + variacao(base);
     }
 
     private int variacao(int base) {
-        return (int) (base * (Math.random() * 0.2 - 0.1)); // ±10%
+        return (int) (base * (Math.random() * 0.2 - 0.1));
     }
 
     // ─────────────────────────────────────────────
@@ -177,23 +206,16 @@ public class BatalhaServiceImpl implements BatalhaService {
     // ─────────────────────────────────────────────
 
     private BatalhaResponse.Turno executarTurnoItem(Batalha batalha, Long itemId) {
-        if (itemId == null) {
-            throw new DataIntegrityException("itemId é obrigatório ao usar USAR_ITEM.");
-        }
-
-        // Inimigo aproveita a abertura com 20% de bônus de dano
+        if (itemId == null) throw new DataIntegrityException("itemId é obrigatório.");
         int danoInimigo = (int) (batalha.getInimigo().getAtaque() * 1.2);
         batalha.getPersonagem().receberDano(danoInimigo);
-
         if (batalha.getPersonagem().estaMorto()) {
             return encerrarComDerrota(batalha, 0, danoInimigo);
         }
-
         batalha.avancarTurno();
         repositorio.save(batalha);
-
         return new BatalhaResponse.Turno(
-                0, danoInimigo, false,
+                0, danoInimigo, false, null,
                 batalha.getPersonagem().getHpAtual(),
                 batalha.getPersonagem().getMpAtual(),
                 batalha.getInimigo().getHpAtual(),
@@ -207,101 +229,81 @@ public class BatalhaServiceImpl implements BatalhaService {
     // Fim de batalha
     // ─────────────────────────────────────────────
 
-    private BatalhaResponse.Turno encerrarComVitoria(Batalha batalha, int danoCausado) {
-        long almasGanhas = batalha.getInimigo().getRecompensaAlmas();
-        long xpGanha = almasGanhas / 10;
-
+    private BatalhaResponse.Turno encerrarComVitoria(Batalha batalha, ResultadoCombo resultado) {
+        long bitsGanhos = batalha.getInimigo().getRecompensaAlmas();
         batalha.setResultado(ResultadoBatalhaType.VITORIA);
         repositorio.save(batalha);
 
-        // Sincroniza com a game-api
         gameApiFeign.sincronizarVitoria(
                 batalha.getPersonagem().getPersonagemId(),
                 new GameApiFeign.SincronizarVitoriaRequest(
                         batalha.getPersonagem().getHpAtual(),
                         batalha.getPersonagem().getMpAtual(),
-                        almasGanhas,
-                        xpGanha
+                        bitsGanhos, bitsGanhos / 10
                 )
         );
 
         repositorio.deleteById(batalha.getId());
-        log.info("Vitória! {} derrotou {} — {} almas ganhas",
-                batalha.getPersonagem().getNome(),
-                batalha.getInimigo().getNome(),
-                almasGanhas);
-
         return new BatalhaResponse.Turno(
-                danoCausado, 0, false,
+                resultado.danoTotal(), 0, resultado.critico(), resultado.memoriaQueimada(),
                 batalha.getPersonagem().getHpAtual(),
                 batalha.getPersonagem().getMpAtual(),
                 0, batalha.getTurnoAtual(),
                 ResultadoBatalhaType.VITORIA,
-                true, null, null, almasGanhas
+                true, null, null, bitsGanhos
         );
     }
 
     private BatalhaResponse.Turno encerrarComDerrota(Batalha batalha, int danoCausado, int danoRecebido) {
+        EstadoPersonagemCombate p = batalha.getPersonagem();
         batalha.setResultado(ResultadoBatalhaType.DERROTA);
         repositorio.save(batalha);
 
-        // Notifica a game-api — ela cria o SoulDrop
-        String localizacao = "Derrotado por %s no turno %d"
-                .formatted(batalha.getInimigo().getNome(), batalha.getTurnoAtual());
+        Long soulDropId = null;
+        String localizacao = "Servidor %s — Turno %d".formatted(
+                batalha.getInimigo().getNome(), batalha.getTurnoAtual());
 
-        var soulDrop = gameApiFeign.notificarMorte(
-                batalha.getPersonagem().getPersonagemId(),
-                new GameApiFeign.MorteRequest(
-                        batalha.getPersonagem().getHpAtual(), // almas — a game-api sabe o valor real
-                        localizacao
-                )
-        ).getBody();
+        if (p.temBits()) {
+            // Morte normal — cria SoulDrop com os Bits
+            var drop = gameApiFeign.notificarMorte(p.getPersonagemId(),
+                    new GameApiFeign.MorteRequest(p.getBitsConsciencia(), localizacao)).getBody();
+            if (drop != null) soulDropId = drop.soulDropId();
+        } else {
+            // Hollow Digital — sem Bits, mente vira NPC
+            gameApiFeign.notificarHollow(p.getPersonagemId());
+            log.info("HOLLOW DIGITAL: {} foi corrompido pelo sistema", p.getNome());
+        }
 
         repositorio.deleteById(batalha.getId());
-        log.info("Derrota! {} foi derrotado por {}",
-                batalha.getPersonagem().getNome(),
-                batalha.getInimigo().getNome());
-
         return new BatalhaResponse.Turno(
-                danoCausado, danoRecebido, false,
-                0, batalha.getPersonagem().getMpAtual(),
+                danoCausado, danoRecebido, false, null,
+                0, p.getMpAtual(),
                 batalha.getInimigo().getHpAtual(),
                 batalha.getTurnoAtual(),
-                ResultadoBatalhaType.DERROTA,
-                true,
-                soulDrop != null ? soulDrop.soulDropId() : null,
-                soulDrop != null ? soulDrop.localizacao() : localizacao,
-                null
+                p.temBits() ? ResultadoBatalhaType.DERROTA : ResultadoBatalhaType.DERROTA,
+                true, soulDropId, localizacao, null
         );
     }
 
     // ─────────────────────────────────────────────
-    // Validações
+    // Validações e helpers
     // ─────────────────────────────────────────────
 
     private void validarCombo(EstadoPersonagemCombate p, List<AcaoTurnoType> combo) {
-        int custoAp = combo.stream()
-                .mapToInt(AcaoTurnoType::getCustAp)
-                .sum();
-
+        int custoAp = combo.stream().mapToInt(AcaoTurnoType::getCustAp).sum();
         if (custoAp > p.getApMaximo()) {
             throw new DataIntegrityException(
                     "AP insuficiente. Custo: %d, disponível: %d".formatted(custoAp, p.getApMaximo())
             );
         }
-
         long qtdEspecial = combo.stream().filter(a -> a == AcaoTurnoType.ESPECIAL).count();
         if (qtdEspecial > 0 && p.getMpAtual() < 3 * qtdEspecial) {
             throw new DataIntegrityException(
-                    "MP insuficiente para ESPECIAL. Necessário: %d, disponível: %d"
+                    "MP insuficiente. Necessário: %d, disponível: %d"
                             .formatted(3 * qtdEspecial, p.getMpAtual())
             );
         }
     }
-
-    // ─────────────────────────────────────────────
-    // Helpers
-    // ─────────────────────────────────────────────
 
     private EstadoPersonagemCombate montarEstadoPersonagem(BatalhaRequest.IniciarBatalha r) {
         EstadoPersonagemCombate p = new EstadoPersonagemCombate();
@@ -316,6 +318,8 @@ public class BatalhaServiceImpl implements BatalhaService {
         p.setDefesa(r.defesa());
         p.setVelocidade(r.velocidade());
         p.setSorte(r.sorte());
+        p.setBitsConsciencia(r.bitsConsciencia());
+        p.setTemMemoriasDisponiveis(r.temMemoriasDisponiveis());
         return p;
     }
 
@@ -340,17 +344,18 @@ public class BatalhaServiceImpl implements BatalhaService {
 
     private BatalhaResponse.Estado toEstado(Batalha b) {
         return new BatalhaResponse.Estado(
-                b.getId(),
-                b.getTurnoAtual(),
-                b.getResultado(),
-                b.getPersonagem().getHpAtual(),
-                b.getPersonagem().getHpMaximo(),
-                b.getPersonagem().getMpAtual(),
-                b.getPersonagem().getMpMaximo(),
-                b.getInimigo().getNome(),
-                b.getInimigo().getCategoria(),
-                b.getInimigo().getHpAtual(),
-                b.getInimigo().getHpMaximo()
+                b.getId(), b.getTurnoAtual(), b.getResultado(),
+                b.getPersonagem().getHpAtual(), b.getPersonagem().getHpMaximo(),
+                b.getPersonagem().getMpAtual(), b.getPersonagem().getMpMaximo(),
+                b.getInimigo().getNome(), b.getInimigo().getCategoria(),
+                b.getInimigo().getHpAtual(), b.getInimigo().getHpMaximo()
         );
+    }
+
+    // Records internos
+    private record ResultadoCombo(int danoTotal, boolean critico, String memoriaQueimada) {
+    }
+
+    private record AtaqueDano(int dano, boolean critico) {
     }
 }

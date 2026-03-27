@@ -10,22 +10,10 @@ import java.util.List;
 
 public class BatalhaRequest {
 
-    /**
-     * Iniciada pela narrative-api quando o GM gera um inimigo.
-     * Contém o snapshot do personagem e os dados do inimigo gerado.
-     */
     public record IniciarBatalha(
-
-            @NotNull(message = "ID do personagem é obrigatório")
-            Long personagemId,
-
-            @NotBlank(message = "ID da sessão é obrigatório")
-            String sessaoId,
-
-            // ─── Snapshot do personagem ───────────────────────
-            @NotBlank(message = "Nome do personagem é obrigatório")
-            String nomePersonagem,
-
+            @NotNull Long personagemId,
+            @NotBlank String sessaoId,
+            @NotBlank String nomePersonagem,
             @NotNull int hpAtual,
             @NotNull int hpMaximo,
             @NotNull int mpAtual,
@@ -36,36 +24,25 @@ public class BatalhaRequest {
             @NotNull int velocidade,
             @NotNull int sorte,
 
-            // ─── Dados do inimigo gerado pelo GM ──────────────
-            @NotBlank(message = "Nome do inimigo é obrigatório")
-            String nomeInimigo,
+            // Simulacro do Vazio
+            long bitsConsciencia,
+            boolean hollow,
+            boolean temMemoriasDisponiveis,
 
+            // Inimigo gerado pelo GM
+            @NotBlank String nomeInimigo,
             String descricaoInimigo,
-
-            @NotNull(message = "Categoria do inimigo é obrigatória")
-            CategoriaInimigoType categoriaInimigo,
-
+            @NotNull CategoriaInimigoType categoriaInimigo,
             @NotNull int hpInimigo,
             @NotNull int ataqueInimigo,
             @NotNull int defesaInimigo,
-            @NotNull long recompensaAlmas
+            long recompensaAlmas
     ) {
     }
 
-    /**
-     * Submissão do combo de ações do turno.
-     * A soma dos custos de AP não pode ultrapassar o apMaximo do personagem.
-     * Se o combo contiver USAR_ITEM, itemId é obrigatório.
-     */
     public record ExecutarTurno(
-
-            @NotNull(message = "ID da batalha é obrigatório")
-            String batalhaId,
-
-            @NotEmpty(message = "O combo não pode ser vazio")
-            List<AcaoTurnoType> combo,
-
-            /** Obrigatório quando o combo contém USAR_ITEM */
+            @NotNull String batalhaId,
+            @NotEmpty List<AcaoTurnoType> combo,
             Long itemId
     ) {
     }
