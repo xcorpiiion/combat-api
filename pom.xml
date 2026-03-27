@@ -92,7 +92,6 @@
             <version>2026.0.1-SNAPSHOT</version>
         </dependency>
 
-        <!-- Lib interna de segurança -->
         <dependency>
             <groupId>br.com.study</groupId>
             <artifactId>generic-crud-mongo</artifactId>
