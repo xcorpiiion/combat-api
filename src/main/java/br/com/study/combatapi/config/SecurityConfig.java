@@ -1,6 +1,8 @@
 package br.com.study.combatapi.config;
 
 import br.com.study.genericauthorization.configuration.AbstractMicroserviceSecurityConfig;
+import br.com.study.genericauthorization.configuration.SecurityRegistryCustomizer;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -15,7 +17,8 @@ public class SecurityConfig extends AbstractMicroserviceSecurityConfig {
             AuthorizeHttpRequestsConfigurer<HttpSecurity>
                     .AuthorizationManagerRequestMatcherRegistry auth
     ) {
-        auth.requestMatchers("/swagger-ui/**", "/v3/api-docs/**").permitAll();
+        auth.requestMatchers("/swagger-ui/**", "/v3/api-docs/**").permitAll()
+                .requestMatchers("/actuator/health", "/actuator/info").permitAll();
     }
 
     @Override
@@ -23,6 +26,14 @@ public class SecurityConfig extends AbstractMicroserviceSecurityConfig {
             AuthorizeHttpRequestsConfigurer<HttpSecurity>
                     .AuthorizationManagerRequestMatcherRegistry auth
     ) {
-        // Todos os endpoints de batalha exigem autenticação
+    }
+
+    @Bean
+    @Override
+    public SecurityRegistryCustomizer securityRegistryCustomizer() {
+        return auth -> {
+            configurePublicEndpoints(auth);
+            configureProtectedEndpoints(auth);
+        };
     }
 }

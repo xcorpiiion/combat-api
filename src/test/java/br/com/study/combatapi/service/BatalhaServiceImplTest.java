@@ -49,19 +49,23 @@ class BatalhaServiceImplTest {
 
     @BeforeEach
     void setUp() {
+        // Record atualizado com bitsConsciencia, hollow e temMemoriasDisponiveis
         requestIniciar = new BatalhaRequest.IniciarBatalha(
                 PERSONAGEM_ID, "sessao-123",
-                "Solaire",
+                "Nexus-7",
                 100, 150, 40, 50, 4,
                 18, 12, 8, 5,
-                "Cavaleiro Oco", "Um guerreiro sem alma",
+                500L,   // bitsConsciencia
+                false,  // hollow
+                true,   // temMemoriasDisponiveis
+                "Vigilante de Dados", "Cavaleiro de fibra ótica",
                 CategoriaInimigoType.NORMAL,
                 80, 12, 5, 100L
         );
 
         EstadoPersonagemCombate personagem = new EstadoPersonagemCombate();
         personagem.setPersonagemId(PERSONAGEM_ID);
-        personagem.setNome("Solaire");
+        personagem.setNome("Nexus-7");
         personagem.setHpAtual(100);
         personagem.setHpMaximo(150);
         personagem.setMpAtual(40);
@@ -71,9 +75,11 @@ class BatalhaServiceImplTest {
         personagem.setDefesa(12);
         personagem.setVelocidade(8);
         personagem.setSorte(5);
+        personagem.setBitsConsciencia(500L);
+        personagem.setTemMemoriasDisponiveis(true);
 
         Inimigo inimigo = new Inimigo();
-        inimigo.setNome("Cavaleiro Oco");
+        inimigo.setNome("Vigilante de Dados");
         inimigo.setCategoria(CategoriaInimigoType.NORMAL);
         inimigo.setHpMaximo(80);
         inimigo.setHpAtual(80);
@@ -111,7 +117,7 @@ class BatalhaServiceImplTest {
             BatalhaResponse.Inicio response = service.iniciar(requestIniciar, USUARIO_ID);
 
             assertThat(response.batalhaId()).isEqualTo(BATALHA_ID);
-            assertThat(response.nomeInimigo()).isEqualTo("Cavaleiro Oco");
+            assertThat(response.nomeInimigo()).isEqualTo("Vigilante de Dados");
             assertThat(response.turnoAtual()).isEqualTo(1);
             verify(repositorio).save(any());
         }
@@ -121,10 +127,11 @@ class BatalhaServiceImplTest {
         void categoriaElite_aplicaMultiplicador() {
             var requestElite = new BatalhaRequest.IniciarBatalha(
                     PERSONAGEM_ID, "sessao-123",
-                    "Solaire",
+                    "Nexus-7",
                     100, 150, 40, 50, 4,
                     18, 12, 8, 5,
-                    "Cavaleiro Elite", "Versão poderosa",
+                    500L, false, true,
+                    "Vigilante Elite", "Versão corrompida",
                     CategoriaInimigoType.ELITE,
                     80, 12, 5, 100L
             );
@@ -140,6 +147,27 @@ class BatalhaServiceImplTest {
 
             // Elite tem multiplicador 1.5 — HP base 80 * 1.5 = 120
             assertThat(response.hpInimigo()).isEqualTo(120);
+        }
+
+        @Test
+        @DisplayName("lança DataIntegrityException quando personagem é Hollow")
+        void personagemHollow_lancaExcecao() {
+            var requestHollow = new BatalhaRequest.IniciarBatalha(
+                    PERSONAGEM_ID, "sessao-123",
+                    "Nexus-7",
+                    0, 150, 40, 50, 4,
+                    18, 12, 8, 5,
+                    0L, true, false,  // hollow = true
+                    "Vigilante", null,
+                    CategoriaInimigoType.NORMAL,
+                    80, 12, 5, 100L
+            );
+
+            assertThatThrownBy(() -> service.iniciar(requestHollow, USUARIO_ID))
+                    .isInstanceOf(DataIntegrityException.class)
+                    .hasMessageContaining("Hollow");
+
+            verify(repositorio, never()).save(any());
         }
 
         @Test
@@ -183,7 +211,6 @@ class BatalhaServiceImplTest {
         @Test
         @DisplayName("lança DataIntegrityException quando AP é insuficiente")
         void apInsuficiente_lancaExcecao() {
-            // AP máximo é 4, combo custa 5 (ATAQUE_FORTE=2 + ATAQUE_FORTE=2 + ATACAR=1)
             var request = new BatalhaRequest.ExecutarTurno(
                     BATALHA_ID,
                     List.of(AcaoTurnoType.ATAQUE_FORTE, AcaoTurnoType.ATAQUE_FORTE, AcaoTurnoType.ATACAR),
@@ -200,7 +227,7 @@ class BatalhaServiceImplTest {
         @Test
         @DisplayName("lança DataIntegrityException quando MP é insuficiente para ESPECIAL")
         void mpInsuficiente_lancaExcecao() {
-            batalhaEmAndamento.getPersonagem().setMpAtual(2); // menos que 3
+            batalhaEmAndamento.getPersonagem().setMpAtual(2);
 
             var request = new BatalhaRequest.ExecutarTurno(
                     BATALHA_ID, List.of(AcaoTurnoType.ESPECIAL), null
@@ -214,9 +241,9 @@ class BatalhaServiceImplTest {
         }
 
         @Test
-        @DisplayName("vitória quando inimigo chega a 0 HP — sincroniza com game-api")
+        @DisplayName("vitória — sincroniza Bits com game-api e deleta batalha")
         void inimigoMorre_retornaVitoria() {
-            batalhaEmAndamento.getInimigo().setHpAtual(1); // quase morto
+            batalhaEmAndamento.getInimigo().setHpAtual(1);
 
             var request = new BatalhaRequest.ExecutarTurno(
                     BATALHA_ID, List.of(AcaoTurnoType.ATAQUE_FORTE), null
@@ -230,16 +257,17 @@ class BatalhaServiceImplTest {
 
             assertThat(response.resultado()).isEqualTo(ResultadoBatalhaType.VITORIA);
             assertThat(response.batalhaEncerrada()).isTrue();
-            assertThat(response.almasGanhas()).isPositive();
+            assertThat(response.bitsConscienciaGanhos()).isPositive();
             verify(gameApiFeign).sincronizarVitoria(any(), any());
             verify(repositorio).deleteById(BATALHA_ID);
         }
 
         @Test
-        @DisplayName("derrota quando personagem chega a 0 HP — notifica morte na game-api")
-        void personagemMorre_retornaDerrota() {
-            batalhaEmAndamento.getPersonagem().setHpAtual(1); // quase morto
-            batalhaEmAndamento.getInimigo().setAtaque(500);   // inimigo mata com certeza
+        @DisplayName("derrota com Bits — cria SoulDrop na game-api")
+        void personagemMorreComBits_retornaDerrota() {
+            batalhaEmAndamento.getPersonagem().setHpAtual(1);
+            batalhaEmAndamento.getPersonagem().setBitsConsciencia(500L);
+            batalhaEmAndamento.getInimigo().setAtaque(500);
 
             var request = new BatalhaRequest.ExecutarTurno(
                     BATALHA_ID, List.of(AcaoTurnoType.ATACAR), null
@@ -248,7 +276,7 @@ class BatalhaServiceImplTest {
                     .thenReturn(Optional.of(batalhaEmAndamento));
             when(gameApiFeign.notificarMorte(any(), any()))
                     .thenReturn(ResponseEntity.ok(
-                            new GameApiFeign.SoulDropResponse(99L, "Entrada da Catedral")
+                            new GameApiFeign.SoulDropResponse(99L, "Servidor Zero — Setor 7")
                     ));
 
             BatalhaResponse.Turno response = service.executarTurno(request, USUARIO_ID);
@@ -257,6 +285,26 @@ class BatalhaServiceImplTest {
             assertThat(response.batalhaEncerrada()).isTrue();
             assertThat(response.soulDropId()).isEqualTo(99L);
             verify(gameApiFeign).notificarMorte(any(), any());
+            verify(repositorio).deleteById(BATALHA_ID);
+        }
+
+        @Test
+        @DisplayName("derrota sem Bits — Hollow Digital, notifica game-api")
+        void personagemMorreSemBits_retornaHollow() {
+            batalhaEmAndamento.getPersonagem().setHpAtual(1);
+            batalhaEmAndamento.getPersonagem().setBitsConsciencia(0L); // sem Bits
+            batalhaEmAndamento.getInimigo().setAtaque(500);
+
+            var request = new BatalhaRequest.ExecutarTurno(
+                    BATALHA_ID, List.of(AcaoTurnoType.ATACAR), null
+            );
+            when(repositorio.findByIdAndUsuarioId(BATALHA_ID, USUARIO_ID))
+                    .thenReturn(Optional.of(batalhaEmAndamento));
+
+            service.executarTurno(request, USUARIO_ID);
+
+            verify(gameApiFeign).notificarHollow(PERSONAGEM_ID);
+            verify(gameApiFeign, never()).notificarMorte(any(), any());
             verify(repositorio).deleteById(BATALHA_ID);
         }
 
@@ -307,7 +355,7 @@ class BatalhaServiceImplTest {
             BatalhaResponse.Estado estado = service.buscarEstado(BATALHA_ID, USUARIO_ID);
 
             assertThat(estado.batalhaId()).isEqualTo(BATALHA_ID);
-            assertThat(estado.nomeInimigo()).isEqualTo("Cavaleiro Oco");
+            assertThat(estado.nomeInimigo()).isEqualTo("Vigilante de Dados");
             assertThat(estado.resultado()).isEqualTo(ResultadoBatalhaType.EM_ANDAMENTO);
         }
 
